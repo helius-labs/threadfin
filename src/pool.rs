@@ -5,16 +5,15 @@ use std::{
     future::Future,
     ops::{Range, RangeInclusive, RangeTo, RangeToInclusive},
     sync::{
-        atomic::{AtomicUsize, Ordering},
-        Arc,
-        Condvar,
-        Mutex,
+        Arc, Condvar, Mutex,
+        atomic::{AtomicBool, AtomicUsize, Ordering},
     },
     thread,
     time::{Duration, Instant},
 };
 
-use crossbeam_channel::{bounded, unbounded, Receiver, Sender};
+use cadence_macros::{is_global_default_set, statsd_gauge};
+use crossbeam_channel::{Receiver, Sender, bounded, unbounded};
 use once_cell::sync::Lazy;
 
 use crate::{
@@ -320,6 +319,7 @@ impl Builder {
             running_tasks_count: Default::default(),
             completed_tasks_count: Default::default(),
             panicked_tasks_count: Default::default(),
+            exit: AtomicBool::new(false),
             keep_alive: self.keep_alive,
             shutdown_cvar: Condvar::new(),
         };
@@ -410,7 +410,37 @@ impl ThreadPool {
     /// [`ThreadPool::builder`].
     #[inline]
     pub fn new() -> Self {
-        Self::builder().build()
+        let pool = Self::builder().build();
+        if is_global_default_set() {
+            pool.metrics_thread();
+        }
+        pool
+    }
+
+    fn metrics_thread(&self) {
+        let shared = self.shared.clone();
+        let name = self
+            .thread_name
+            .clone()
+            .unwrap_or_else(|| "threadfin_default".to_string());
+        std::thread::spawn(move || {
+            loop {
+                if shared.exit.load(Ordering::SeqCst) {
+                    return;
+                }
+                let thread_count_metric = format!("{}.thread_count", name);
+                let running_tasks_metric = format!("{}.running_tasks_count", name);
+                statsd_gauge!(
+                    &thread_count_metric,
+                    *shared.thread_count.lock().unwrap() as u64
+                );
+                statsd_gauge!(
+                    &running_tasks_metric,
+                    shared.running_tasks_count.load(Ordering::Relaxed) as u64
+                );
+                std::thread::sleep(Duration::from_secs(5));
+            }
+        });
     }
 
     /// Get a builder for creating a customized thread pool.
@@ -524,7 +554,10 @@ impl ThreadPool {
     #[inline]
     #[allow(clippy::useless_conversion)]
     pub fn completed_tasks(&self) -> u64 {
-        self.shared.completed_tasks_count.load(Ordering::Relaxed).into()
+        self.shared
+            .completed_tasks_count
+            .load(Ordering::Relaxed)
+            .into()
     }
 
     /// Get the number of tasks that have panicked since the pool was created.
@@ -553,7 +586,10 @@ impl ThreadPool {
     #[inline]
     #[allow(clippy::useless_conversion)]
     pub fn panicked_tasks(&self) -> u64 {
-        self.shared.panicked_tasks_count.load(Ordering::SeqCst).into()
+        self.shared
+            .panicked_tasks_count
+            .load(Ordering::SeqCst)
+            .into()
     }
 
     /// Submit a closure to be executed by the thread pool.
@@ -742,7 +778,7 @@ impl ThreadPool {
         // Closing this channel will interrupt any idle workers and signal to
         // all workers that the pool is shutting down.
         drop(self.queue.0);
-
+        self.shared.exit.store(true, Ordering::SeqCst);
         let mut thread_count = self.shared.thread_count.lock().unwrap();
 
         while *thread_count > 0 {
@@ -877,6 +913,7 @@ struct Shared {
     running_tasks_count: AtomicUsize,
     completed_tasks_count: AtomicCounter,
     panicked_tasks_count: AtomicCounter,
+    exit: AtomicBool,
     keep_alive: Duration,
     shutdown_cvar: Condvar,
 }
