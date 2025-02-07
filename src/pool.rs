@@ -338,6 +338,9 @@ impl Builder {
             assert!(result.is_ok());
         }
 
+        if is_global_default_set() {
+            pool.start_metrics_thread();
+        }
         pool
     }
 }
@@ -410,14 +413,10 @@ impl ThreadPool {
     /// [`ThreadPool::builder`].
     #[inline]
     pub fn new() -> Self {
-        let pool = Self::builder().build();
-        if is_global_default_set() {
-            pool.metrics_thread();
-        }
-        pool
+        Self::builder().build()
     }
 
-    fn metrics_thread(&self) {
+    fn start_metrics_thread(&self) {
         let shared = self.shared.clone();
         let name = self
             .thread_name
