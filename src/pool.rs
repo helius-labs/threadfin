@@ -338,9 +338,9 @@ impl Builder {
             assert!(result.is_ok());
         }
 
-        // if is_global_default_set() {
-        //     pool.start_metrics_thread();
-        // }
+        if is_global_default_set() {
+            pool.start_metrics_thread();
+        }
         pool
     }
 }
@@ -429,10 +429,10 @@ impl ThreadPool {
                 }
                 let thread_count_metric = format!("{}.thread_count", name);
                 let running_tasks_metric = format!("{}.running_tasks_count", name);
-                statsd_gauge!(
-                    &thread_count_metric,
-                    *shared.thread_count.lock().unwrap() as u64
-                );
+                let Ok(thread_count) = shared.thread_count.lock() else {
+                    return;
+                };
+                statsd_gauge!(&thread_count_metric, *thread_count as u64);
                 statsd_gauge!(
                     &running_tasks_metric,
                     shared.running_tasks_count.load(Ordering::Relaxed) as u64
