@@ -5,16 +5,15 @@ use std::{
     future::Future,
     ops::{Range, RangeInclusive, RangeTo, RangeToInclusive},
     sync::{
+        Arc, Condvar, Mutex,
         atomic::{AtomicUsize, Ordering},
-        Arc,
-        Condvar,
-        Mutex,
     },
     thread,
     time::{Duration, Instant},
 };
 
-use crossbeam_channel::{bounded, unbounded, Receiver, Sender};
+use cadence_macros::{is_global_default_set, statsd_gauge};
+use crossbeam_channel::{Receiver, Sender, bounded, unbounded};
 use once_cell::sync::Lazy;
 
 use crate::{
@@ -410,7 +409,34 @@ impl ThreadPool {
     /// [`ThreadPool::builder`].
     #[inline]
     pub fn new() -> Self {
-        Self::builder().build()
+        let pool = Self::builder().build();
+        if is_global_default_set() {
+            pool.metrics_thread();
+        }
+        pool
+    }
+
+    fn metrics_thread(&self) {
+        let shared = self.shared.clone();
+        let name = self
+            .thread_name
+            .clone()
+            .unwrap_or_else(|| "threadfin_default".to_string());
+        std::thread::spawn(move || {
+            loop {
+                let thread_count_metric = format!("{}.thread_count", name);
+                let running_tasks_metric = format!("{}.running_tasks_count", name);
+                statsd_gauge!(
+                    &thread_count_metric,
+                    *shared.thread_count.lock().unwrap() as u64
+                );
+                statsd_gauge!(
+                    &running_tasks_metric,
+                    shared.running_tasks_count.load(Ordering::Relaxed) as u64
+                );
+                std::thread::sleep(Duration::from_secs(5));
+            }
+        });
     }
 
     /// Get a builder for creating a customized thread pool.
@@ -524,7 +550,10 @@ impl ThreadPool {
     #[inline]
     #[allow(clippy::useless_conversion)]
     pub fn completed_tasks(&self) -> u64 {
-        self.shared.completed_tasks_count.load(Ordering::Relaxed).into()
+        self.shared
+            .completed_tasks_count
+            .load(Ordering::Relaxed)
+            .into()
     }
 
     /// Get the number of tasks that have panicked since the pool was created.
@@ -553,7 +582,10 @@ impl ThreadPool {
     #[inline]
     #[allow(clippy::useless_conversion)]
     pub fn panicked_tasks(&self) -> u64 {
-        self.shared.panicked_tasks_count.load(Ordering::SeqCst).into()
+        self.shared
+            .panicked_tasks_count
+            .load(Ordering::SeqCst)
+            .into()
     }
 
     /// Submit a closure to be executed by the thread pool.
