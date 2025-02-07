@@ -6,7 +6,7 @@ use std::{
     ops::{Range, RangeInclusive, RangeTo, RangeToInclusive},
     sync::{
         Arc, Condvar, Mutex,
-        atomic::{AtomicUsize, Ordering},
+        atomic::{AtomicBool, AtomicUsize, Ordering},
     },
     thread,
     time::{Duration, Instant},
@@ -319,6 +319,7 @@ impl Builder {
             running_tasks_count: Default::default(),
             completed_tasks_count: Default::default(),
             panicked_tasks_count: Default::default(),
+            exit: AtomicBool::new(false),
             keep_alive: self.keep_alive,
             shutdown_cvar: Condvar::new(),
         };
@@ -424,6 +425,9 @@ impl ThreadPool {
             .unwrap_or_else(|| "threadfin_default".to_string());
         std::thread::spawn(move || {
             loop {
+                if shared.exit.load(Ordering::SeqCst) {
+                    return;
+                }
                 let thread_count_metric = format!("{}.thread_count", name);
                 let running_tasks_metric = format!("{}.running_tasks_count", name);
                 statsd_gauge!(
@@ -774,7 +778,7 @@ impl ThreadPool {
         // Closing this channel will interrupt any idle workers and signal to
         // all workers that the pool is shutting down.
         drop(self.queue.0);
-
+        self.shared.exit.store(true, Ordering::SeqCst);
         let mut thread_count = self.shared.thread_count.lock().unwrap();
 
         while *thread_count > 0 {
@@ -909,6 +913,7 @@ struct Shared {
     running_tasks_count: AtomicUsize,
     completed_tasks_count: AtomicCounter,
     panicked_tasks_count: AtomicCounter,
+    exit: AtomicBool,
     keep_alive: Duration,
     shutdown_cvar: Condvar,
 }
