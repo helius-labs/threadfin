@@ -338,9 +338,9 @@ impl Builder {
             assert!(result.is_ok());
         }
 
-        if is_global_default_set() {
-            pool.start_metrics_thread();
-        }
+        // if is_global_default_set() {
+        //     pool.start_metrics_thread();
+        // }
         pool
     }
 }
