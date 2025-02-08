@@ -424,15 +424,18 @@ impl ThreadPool {
             .unwrap_or_else(|| "threadfin_default".to_string());
         std::thread::spawn(move || {
             loop {
-                if shared.exit.load(Ordering::SeqCst) {
+                if shared.exit.load(Ordering::Relaxed) {
                     return;
                 }
                 let thread_count_metric = format!("{}.thread_count", name);
                 let running_tasks_metric = format!("{}.running_tasks_count", name);
-                let Ok(thread_count) = shared.thread_count.lock() else {
-                    return;
+                let thread_count = {
+                    let Ok(thread_count) = shared.thread_count.lock() else {
+                        return;
+                    };
+                    *thread_count
                 };
-                statsd_gauge!(&thread_count_metric, *thread_count as u64);
+                statsd_gauge!(&thread_count_metric, thread_count as u64);
                 statsd_gauge!(
                     &running_tasks_metric,
                     shared.running_tasks_count.load(Ordering::Relaxed) as u64
