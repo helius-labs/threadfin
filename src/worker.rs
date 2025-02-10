@@ -1,4 +1,7 @@
-use std::{collections::HashMap, time::Duration};
+use std::{
+    collections::HashMap,
+    time::{Duration, Instant},
+};
 
 use crossbeam_channel::{Receiver, Select, Sender, unbounded};
 
@@ -114,30 +117,30 @@ impl<L: Listener> Worker<L> {
         if !self.pending_tasks.is_empty() {
             wake_id = Some(select.recv(&self.wake_notifications.1));
         }
-
-        match select.try_select() {
-            Ok(op) if Some(op.index()) == queue_id => {
-                if let Ok(coroutine) = op.recv(&self.queue) {
-                    PollResult::Work(coroutine)
-                } else {
-                    PollResult::ShutDown
+        let start = Instant::now();
+        while start.elapsed() < self.keep_alive {
+            match select.try_select() {
+                Ok(op) if Some(op.index()) == queue_id => {
+                    if let Ok(coroutine) = op.recv(&self.queue) {
+                        return PollResult::Work(coroutine);
+                    } else {
+                        return PollResult::ShutDown;
+                    }
                 }
-            }
-            Ok(op) if Some(op.index()) == immediate_queue_id => {
-                if let Ok(coroutine) = op.recv(&self.immediate_queue) {
-                    PollResult::Work(coroutine)
-                } else {
-                    PollResult::ShutDown
+                Ok(op) if Some(op.index()) == immediate_queue_id => {
+                    if let Ok(coroutine) = op.recv(&self.immediate_queue) {
+                        return PollResult::Work(coroutine);
+                    } else {
+                        return PollResult::ShutDown;
+                    }
                 }
-            }
-            Ok(op) if Some(op.index()) == wake_id => {
-                PollResult::Wake(op.recv(&self.wake_notifications.1).unwrap())
-            }
-            _ => {
-                std::thread::sleep(Duration::from_millis(1));
-                PollResult::Timeout
+                Ok(op) if Some(op.index()) == wake_id => {
+                    return PollResult::Wake(op.recv(&self.wake_notifications.1).unwrap());
+                }
+                _ => {}
             }
         }
+        PollResult::Timeout
     }
 
     fn run_now_or_reschedule(&mut self, mut coroutine: Coroutine) {
