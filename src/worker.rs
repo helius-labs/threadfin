@@ -134,7 +134,7 @@ impl<L: Listener> Worker<L> {
                 PollResult::Wake(op.recv(&self.wake_notifications.1).unwrap())
             }
             _ => {
-                std::thread::sleep(self.keep_alive);
+                std::thread::sleep(Duration::from_millis(1));
                 PollResult::Timeout
             }
         }
