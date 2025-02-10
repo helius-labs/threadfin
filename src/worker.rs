@@ -133,8 +133,7 @@ impl<L: Listener> Worker<L> {
             Ok(op) if Some(op.index()) == wake_id => {
                 PollResult::Wake(op.recv(&self.wake_notifications.1).unwrap())
             }
-            Ok(_) => unreachable!(),
-            Err(_) => {
+            _ => {
                 std::thread::sleep(self.keep_alive);
                 PollResult::Timeout
             }
